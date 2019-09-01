@@ -1,0 +1,389 @@
+#!/bin/bash
+
+OPTION=''
+FILE=''
+COMMAND=''
+REQUEST=''
+TABLE=''
+ORDER=''
+USAGE='Usage: ./bdsh [OPTION]... [COMMAND] [REQUEST]
+OPTION:
+  -h                display usage
+  -f FILE           json database file
+  -j                json formated output for select command'
+ERROR='Error'
+
+function printUsage()
+{
+    cat <<< $USAGE
+    exit 0
+}
+
+function printError()
+{
+    cat <<< $ERROR
+    exit 1
+}
+
+function checkFile()
+{
+    if [[ ${FILE: -5} != ".json" ]]; then
+        printError
+    fi
+}
+
+function create()
+{
+    INC=1
+
+    if [[ $(head -n 1 $FILE) != '{' ]]; then
+        echo { >> $FILE
+        sed -i '$a }' $FILE
+    fi
+    if [[ -z $(grep -F "\"desc_$TABLE\": [" $FILE) ]]; then
+        sed -i 1a\ "\  \"desc_$TABLE\": [" $FILE
+        while [[ $(echo "$CONTENT"| cut -d"," -f$INC) != "" ]]; do
+            TOWRITE=$(echo $CONTENT | cut -d"," -f$INC)
+            if [[ $(echo "$CONTENT"| cut -d"," -f$((INC + 1))) != "" ]]; then
+                TOWRITE="\    \"$TOWRITE\","
+            else
+                TOWRITE="\    \"$TOWRITE\""
+            fi
+            INC=$(($INC + 1))
+            sed -i ${INC}a\ "$TOWRITE" $FILE
+        done
+        INC=$(($INC + 1))
+        sed -i ${INC}a\ '\  ],' $FILE
+        sed -i 's/\(.*\)\]$/\1],/' $FILE
+        sed -i '$i \  \"data_'"$TABLE"'\": [' $FILE
+        sed -i '$i \  ]' $FILE
+    fi
+}
+
+function insert()
+{
+    CONDITION=$(echo $(grep -n "data_$REQUEST" $FILE | grep -Eo '^[^:]+'))
+    if [[ $CONDITION != "" ]]; then
+        INC=$(grep -n "data_$REQUEST" $FILE | grep -Eo '^[^:]+')
+        ONCHE=1
+        NBARG=1
+        sed -i ${INC}a\ '\    {' $FILE
+        if [[ $CONTENT == *","* ]]; then
+            while [[ $(echo "$CONTENT"| cut -d"," -f$NBARG) != "" ]]; do
+                NBARG=$(($NBARG + 1))
+            done
+            NBARG=$(($NBARG - 1))
+        fi
+        while [[ "$ONCHE" -le "$NBARG" ]]; do
+            INC=$(($INC + 1))
+            TOWRITE=$(echo "$CONTENT"| cut -d"," -f$ONCHE)
+            DATA=$(echo $TOWRITE | cut -d"=" -f1)
+            TOWRITE=$(echo $TOWRITE | cut -d"=" -f2)
+            echo $DATA
+            if [[ $(echo "$CONTENT"| cut -d"," -f$((ONCHE + 1))) != "" ]]; then
+                sed -i ${INC}a\ '\      \"'$DATA'\": \"'$TOWRITE'\",' $FILE
+            else
+                sed -i ${INC}a\ '\      \"'$DATA'\": \"'$TOWRITE'\"' $FILE
+            fi
+            ONCHE=$(($ONCHE + 1))
+        done
+        INC=$(($INC + 1))
+        OUI=$(($INC + 1))
+        NEXTLINE=$(head -$OUI $FILE | tail -1)
+        if [[ $NEXTLINE == "  ]" ]] || [[ $NEXTLINE == "  ]," ]]; then
+            sed -i ${INC}a\ '\    }' $FILE
+        else
+            sed -i ${INC}a\ '\    },' $FILE
+        fi
+    else
+        printError
+    fi
+}
+
+function describeTable()
+{
+    touch tmp
+
+    word="desc_"
+    upto="]"
+    quote='"'
+    word="$quote$word$2$quote"
+
+    sed -n "/$word/,/$upto/p" $1 > tmp
+    grep -oP '"\K[^"\047]+(?=["\047])' tmp | tail -n +2
+
+    rm tmp
+}
+
+function selectOneTable()
+{
+        grep $1 $2 > tmpData
+        cut -d ":" -f2 tmpData | tr -d '"' | tr -d ',' > $1
+
+        size=1
+        line=1
+        while [[ $(echo $(sed ''$line'!d' $1)) != "" ]]; do
+            value=$(sed ''$line'!d' $1)
+            line=$(($line + 1))
+
+            lenght=$((${#value} - 2))
+            tableLen=$((${#1}))
+
+            if [ $lenght -gt $size ]; then
+                size=$lenght
+            fi
+
+            if [ $tableLen -gt $size ]; then
+                size=$tableLen
+            fi
+        done
+
+        size=$(($size + 2))
+
+        printf "%-${size}s\n" "$1" >> header
+        i=0
+        while [[ $i -ne $size ]]; do
+            printf "-" >> header
+            i=$(($i + 1))
+        done
+        printf "\n" >> header
+        cat header > tosort
+
+        j=1
+        while [[ $j -lt $line ]]; do
+            data=$(sed ''$j'!d' $1)
+            # _data=$(echo "${data:1:${#data}-2}")
+            printf "%-${size}s\n" "$data" >> tosort
+            j=$(($j + 1))
+        done
+
+        if [[ $3 != "order" ]]; then
+            cat tosort
+            rm header $1 tmpData tosort
+        else
+            sed 1d tosort > tmpSorted
+            sed 1d tmpSorted > sorted
+            cat sorted | sort >> header
+            cat header
+            rm tmpSorted sorted $1 tmpData tosort header
+        fi
+}
+
+function selectFewTable
+{
+        i=1
+        while [[ $(echo $1 | cut -d"," -f$i) != "" ]] ; do
+            content=$(echo $1 | cut -d"," -f$i)
+
+            grep $content $2 > tmpData
+            cut -d ":" -f2 tmpData | tr -d '"' | tr -d ',' > $content
+
+            line=1
+            size=1
+
+            while [[ $(echo $(sed ''$line'!d' $content)) != "" ]]; do
+                value=$(sed ''$line'!d' $content)
+                line=$(($line + 1))
+
+                lenght=$((${#value} - 2))
+                contentlen=$((${#content}))
+
+                if [ $lenght -gt $size ]; then
+                    size=$lenght
+                fi
+
+                if [ $contentlen -gt $size ]; then
+                    size=$contentlen
+                fi
+            done
+
+            sizes+=$size
+            sizes+=';'
+
+            i=$(($i + 1))
+        done
+
+        i=1
+        while [[ $(echo $1 | cut -d"," -f$i) != "" ]] ; do
+            table=$(echo $1 | cut -d"," -f$i)
+            space=$(echo $sizes | cut -d";" -f$i)
+
+            space=$(($space + 1))
+
+            printf "%-${space}s" "$table" >> tosort
+            printf "%-${space}s" "$table" >> header
+
+
+            j=$(($i + 1))
+            if [[ $(echo $1 | cut -d"," -f$j) != "" ]]; then
+                printf " | " >> tosort
+                printf " | " >> header
+
+            else
+                printf "\n" >> tosort
+                printf "\n" >> header
+
+            fi 
+
+            i=$(($i + 1))
+
+        done
+
+        hyphen=0
+        i=1
+        while [[ $(echo $sizes | cut -d";" -f$i) != "" ]] ; do
+            hyphen=$(($(echo $sizes | cut -d";" -f$i) + hyphen))
+            i=$(($i + 1))
+        done
+
+        x=$(($i * 2))
+        pipe=$(($i - 2))
+        x=$(($x + $pipe))
+        i=0
+        hyphen=$(($hyphen + $x))
+
+        while [ $i -ne $hyphen ] ; do
+            printf "-" >> tosort
+            printf "-" >> header
+
+            i=$(($i + 1))
+        done
+
+        printf "\n" >> tosort
+        printf "\n" >> header
+
+
+        j=1
+        while [[ $j -lt $line ]]; do
+            i=1
+            while [[ $(echo $1 | cut -d"," -f$i) != "" ]] ; do
+                content=$(echo $1 | cut -d"," -f$i)
+                data=$(sed ''$j'!d' $content)
+                # _data=$(echo "${data:1:${#data}-2}")
+                space=$(echo $sizes | cut -d";" -f$i)
+                space=$(($space + 1))
+                printf "%-${space}s" "$data" >> tosort
+
+                k=$(($i + 1))
+                if [[ $(echo $1 | cut -d"," -f$k) != "" ]]; then
+                    printf " | " >> tosort
+                else
+                    printf "\n" >> tosort
+                fi 
+
+                i=$(($i + 1))
+            done
+
+        j=$(($j + 1))
+        done
+
+        if [[ $3 != "order" ]]; then
+            cat tosort
+        else
+            sed 1d tosort > tmpSorted
+            sed 1d tmpSorted > sorted
+            cat sorted | sort >> header
+            cat header
+            rm tmpSorted sorted
+        fi
+
+        i=1
+        while [[ $(echo $1 | cut -d"," -f$i) != "" ]] ; do
+            content=$(echo $1 | cut -d"," -f$i)
+            rm $content
+            i=$(($i + 1))
+        done
+
+        rm tmpData tosort header
+}
+
+function selectTable()
+{
+    word="data_"
+    quote='"'
+    word="$quote$word$2$quote"
+
+    sed -n "/$word/,/"]"/p" $1 > tmpTable
+
+    if [[ $3 != *,* ]]; then
+        selectOneTable $3 tmpTable $4
+    else
+        selectFewTable $3 tmpTable $4
+    fi
+
+    rm tmpTable
+}
+
+if [[ $# -eq 0 ]]; then
+    printUsage
+    exit 0
+fi
+
+while : ; do
+    OPTION="$1"
+    case $OPTION in
+        -h)
+            printUsage
+            break
+            ;;
+        -f)
+            FILE="$2"
+            checkFile FILE
+            COMMAND="$3"
+            REQUEST="$4"
+            case $COMMAND in
+                create)
+                    TABLE="$5"
+                    CONTENT="$6"
+                    case $REQUEST in
+                        database)
+                            if [[ ! -f $FILE ]]; then
+                                touch $FILE
+                            else
+                                printError
+                            fi
+                            ;;
+                        table)
+                            if [[ ! -f $FILE ]]; then
+                                touch $FILE
+                            fi
+                            create
+                            ;;
+                        *)
+                            printError
+                            ;;
+                    esac
+                    ;;
+                insert)
+                    CONTENT="$5"
+                    insert
+                    ;;
+                describe)
+                    TABLE="$4"
+                    describeTable $FILE $TABLE
+                    ;;
+                select)
+                    TABLE="$4"
+                    CONTENT="$5"
+                    ORDER="$6"
+                    if [[ $CONTENT != "" ]] && [[ -f $FILE ]]; then
+                       selectTable $FILE $TABLE $CONTENT $ORDER
+                    else
+                        printError
+                    fi
+                    ;;
+                *)
+                    printError
+                    ;;
+            esac
+            break
+            ;;
+        -j)
+            cat $2
+            break
+            ;;
+        *)
+            printError
+            ;;
+    esac
+done
